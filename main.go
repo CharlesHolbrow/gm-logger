@@ -1,44 +1,47 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
-	"sync"
-	"time"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/CharlesHolbrow/gm"
 	"github.com/rakyll/portmidi"
 )
 
-const midiInputDeviceID = 0
+var inputDeviceInt = flag.Int("device", -1, "ID of the device to use")
 
 func main() {
+	flag.Parse()
 	gm.PrintDevices()
 
-	deviceInfo := *portmidi.Info(midiInputDeviceID)
-	if !deviceInfo.IsInputAvailable {
-		panic(fmt.Sprintf("device %d is not an input device", midiInputDeviceID))
+	// Select an input device
+	if *inputDeviceInt == -1 {
+		*inputDeviceInt = int(portmidi.DefaultInputDeviceID())
+		fmt.Println("No device specified. Using the default device")
 	}
 
-	portmidi.Initialize()
+	// Tell the user which device will be used
+	inputID := portmidi.DeviceID(*inputDeviceInt)
+	deviceInfo := *portmidi.Info(inputID)
+	if !deviceInfo.IsInputAvailable {
+		panic(fmt.Sprintf("Device %d is not an input device", inputID))
+	}
+	fmt.Printf("Listening for MIDI on %d - %s %v\n\n", inputID, deviceInfo.Name, deviceInfo.IsInputAvailable)
 
-	fmt.Printf("Listening for MIDI on %d - %s\n", midiInputDeviceID, deviceInfo.Name)
-	myMidiHandler := NewMidiLogger()
-	ms, err := gm.MakeMidiStream(midiInputDeviceID, myMidiHandler)
+	// Open the device, and start logging
+	portmidi.Initialize()
+	ms, err := gm.MakeMidiStream(int(inputID), NewMidiLogger())
 	if err != nil {
 		log.Panicln("Error Making Midi Stream", err)
 	}
 	defer ms.Close()
 
-	out, err := portmidi.NewOutputStream(2, 1024, 0)
-	if err != nil {
-		log.Fatal(err)
-	}
-	out.WriteShort(gm.Note{On: true, Note: 64, Vel: 127}.Midi())
-	time.Sleep(time.Second)
-	out.WriteShort(gm.Note{Note: 64, Vel: 127}.Midi())
-
-	g := sync.WaitGroup{}
-	g.Add(1)
-	g.Wait()
+	// Wait for an exit signal
+	exitSignal := make(chan os.Signal)
+	signal.Notify(exitSignal, syscall.SIGINT, syscall.SIGTERM)
+	<-exitSignal
 }
